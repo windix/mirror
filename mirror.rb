@@ -11,6 +11,9 @@ $logger.level = Logger::DEBUG
 
 class Site
   MAX_LEVELS = 10
+  USER_AGENT = "Mozilla/5.0 (compatible; rorrim; +http://github.com/webtreehouse/rorrim/tree/master)"
+
+  attr_accessor :home
 
   def initialize(source, destination)
     @destination = destination
@@ -18,7 +21,9 @@ class Site
     # setup assets hash and queue the initial asset
     @assets = {}
     @queue = Queue.new
-    add_asset source, 1, true
+    
+    $logger.info "Mirroring #{source} to #{destination}"
+    add_asset source, 1, true, nil
 
     # start to download
     worker = process_queue
@@ -26,19 +31,26 @@ class Site
 
     $logger.debug "Queue is empty"
 
+    $logger.debug "Total retrieved assets: #{@assets.select {|k, v| v.retrieved }.size }"
+    
     $logger.debug "Update links"
-    $logger.debug "Total assets: #{@assets.size}"
     update_links
 
     $logger.debug "Saving assets"
     save_assets
 
+    if @assets.has_key?(source) && @assets[source].retrieved
+      $logger.info "Mirroring is complete"
+      @home = @assets[source].destination
+    else
+      $logger.error "Mirroring has failed"
+    end
   end
 
-  def add_asset(source, level, retrieve = false)
+  def add_asset(source, level, retrieve = false, referer = nil)
     unless @assets.has_key?(source)
-      $logger.debug "Found #{source} Level ##{level}"
-      asset = Asset.new(source, @destination, level)
+      $logger.debug "Found #{source} Level ##{level}" if retrieve
+      asset = Asset.new(source, @destination, level, USER_AGENT, referer)
       @assets[source] = asset
       
       if retrieve
@@ -59,29 +71,32 @@ class Site
           asset.download
           $logger.debug "Downloaded #{asset.source}"
         rescue
-          $logger.error "Failed to download #{asset.source} - #{$!.message}"
+          $logger.error "Failed to download #{asset.source} - #{$!.message} in #{$!.backtrace}"
           next
         end
         
-        if asset.source != asset.original_source
-          $logger.debug "Remove original source #{asset.original_source} from assets"
-          @assets.delete(asset.original_source)
-        end
+        #if asset.source != asset.original_source
+        #  $logger.debug "Remove original source #{asset.original_source} from assets"
+        #  @assets.delete(asset.original_source)
+        #end
         
         @assets[asset.source] = asset
 
-        $logger.debug "Getting linked assets in #{asset.source}"
-        process_links asset.get_links, asset.level + 1
+        process_links asset
       end
     end
   end
     
-  def process_links(links, level)
-    links.each do |link|
+  def process_links(asset)
+    links = asset.get_links
+    level = asset.level + 1
+    referer = asset.source
+
+    links.each do |source, link|
       if link.relation != :anchor && level < MAX_LEVELS
-        add_asset link.source, level, true
+        add_asset source, level, true, referer
       elsif
-        add_asset link.source, level, false
+        add_asset source, level, false, referer
       end
     end
   end
@@ -89,7 +104,6 @@ class Site
   def update_links
     @assets.each do |source, asset|
       if asset.retrieved
-        $logger.debug "Updating links in #{source}"
         asset.update_links(@assets)
       end
     end
@@ -99,17 +113,16 @@ class Site
     @assets.each do |source, asset|
       if asset.retrieved
         $logger.debug "Saving #{source}"
-        asset.save
+        asset.save source
       end
     end
   end
-
 end
 
 class Asset
   LINK_TYPES = {
     :image => [/<\s*(img[^\>]*src\s*=\s*["']?([^"'\s>]*))/im, [:location, :url]],
-    :anchor => [/<\s*a[^\>]*(href\s*=\s*["']?([^"'\s>]*).*?>)(.*?)<\/a>/im, [:location, :url, :context]],
+    # :anchor => [/<\s*a[^\>]*(href\s*=\s*["']?([^"'\s>]*).*?>)(.*?)<\/a>/im, [:location, :url, :context]],
     :background => [/<\s*([body|table|th|tr|td][^\>]*background\s*=\s*["']?([^"'\s>]*))/im, [:location, :url]],
     :input => [/<\s*input[^\>]*(src\s*=\s*["']?([^"'\s>]*))/im, [:location, :url]],
     :css => [/<\s*link[^\>]*stylesheet[^\>]*[^\>]*(href\s*=\s*["']?([^"'\s>]*))/im, [:location, :url]],
@@ -135,44 +148,67 @@ class Asset
     "text/plain" => ".txt",
   }
 
-  attr_accessor :source, :original_source, :level, :filename, :retrieved
+  attr_accessor :source, :destination, :level, :retrieved, :filename
 
-  def initialize(source, destination, level)
-    @source = URI.escape(source)
-    @original_source = @source
+  def initialize(source, destination, level, user_agent, referer)
+    @source = escape_url(source)
     @destination = destination
     @level = level
+    @user_agent = user_agent
+    @referer = referer
+    
     @retrieved = false
   end
 
   def download
     unless @retrieved
-      # grub the data
-      open(@source) do |f|
-        @content_type = f.content_type
-        @source = URI.escape(f.base_uri.to_s)
-        @data = f.read
+      # set user-agent and HTTP referer
+      options = {}
+      options["User-Agent"] = @user_agent
+      options["Referer"] = @referer unless @referer.nil?
       
-        #$logger.debug "content_type = #{@content_type}"
-        #$logger.debug "source = #{@source}"
+      # grub the data
+      open(@source, options) do |f|
+        @content_type = f.content_type
+        @source = escape_url(f.base_uri.to_s)
+        
+        #TODO: if this page has been downloaded already, ignore it
+        @data = f.read
       end
       
       @base = get_base
-      #$logger.debug "base = #{@base}"
 
       @filename = get_filename
-      #$logger.debug "filename = #{@filename}"
       
       @page_title = get_page_title
-      #$logger.debug "page_title = #{@page_title}" 
       
       if @filename
         @destination = File.join(@destination, @filename)
-        #$logger.debug "destination = #{@destination}"
-
         @retrieved = true
       end
     end
+  end
+
+  def escape_url(url)
+    # escape url
+    url = URI.escape(url)
+
+    # unescape some special chars
+    url.gsub! "%23", "#"
+    url.gsub! "%25", "%"
+
+    # remove fragments (parts started with #)  
+    
+    parts = URI.parse(url)
+    
+    # may be a bug in URI.parse: "#abc" can be parsed
+    raise URI::InvalidComponentError if parts.host.nil?
+
+    params = [parts.userinfo, parts.host, parts.port, parts.path, parts.query, nil]
+    URI::HTTP.build(params).to_s
+  
+  rescue URI::InvalidComponentError
+    url
   end
 
   # get base url of the page
@@ -188,8 +224,8 @@ class Asset
       base
     else
       # if not, get it from source url
-
-      uri = URI.parse(@source) 
+      
+      uri = URI.parse(@source)
       
       if uri.scheme == "http" 
         unless uri.path[-1] == ?/
@@ -216,9 +252,11 @@ class Asset
   end
 
   def get_links
-    @links = []
+    @links = {}
     
     if [".html", ".css"].include?(MIME_TYPES[@content_type])
+      $logger.debug "Getting linked assets in #{@source}"
+      
       LINK_TYPES.each do |relation, details|
         re, match_names = *details
         
@@ -228,47 +266,58 @@ class Asset
           match_data = {}
           match_names.each { |k| match_data[k] = matches[i]; i += 1 }
           
+          next if match_data[:url].empty?
+          
           link = Link.new
           link.context = match_data[:context]  if match_data.has_key?(:context)
           link.location = match_data[:location]
           link.relation = relation
-          
+
           link.original_source = match_data[:url]
-          link.source = URI.join(@base, URI.escape(match_data[:url])).to_s
           
-          @links << link
+          begin
+            link.source = URI.join(@base, escape_url(match_data[:url])).to_s
+          rescue
+            $logger.warn "JOIN: '#{@base}', '#{match_data[:url]}'"
+            next
+          end
+
+          @links[link.source] = link unless @links.has_key?(link.source)
         end
       end
     end
-
-    #@links.each do |link|
-    #  $logger.debug "#{link.relation} | #{link.source}"
-    #end
 
     @links
   end
 
   def update_links(assets)
-    if @retrieved
-      @links.each do |link|
+    if @retrieved && [".html", ".css"].include?(MIME_TYPES[@content_type])
+      $logger.debug "Updating links in #{@source}"
+
+      @links.each do |source, link|
         if assets.has_key?(link.source)
           if link.location && link.original_source && assets[link.source].filename
-            s = link.location.gsub(link.original_source, assets[link.source].filename)
-            @data.gsub!(link.location, s)
+            # puts "****** '#{link.location}' '#{link.original_source}' '#{assets[link.source].filename}'"
+            
+            s = link.location.sub(link.original_source, assets[link.source].filename)
+            @data.sub!(link.location, s)
           end
         end
       end
     end
   end
 
-  def save
+  def save(source)
     #TODO: exception handling
     if @retrieved
-      File.open(@destination, 'w') do |f|
-        f.write(@data) 
+      if (source != @source)
+        $logger.debug 'Skipped'
+      else
+        File.open(@destination, 'w') do |f|
+          f.write(@data) 
+        end
+        $logger.debug "Saved #{@source} as #{@destination}"
       end
-      
-      $logger.debug "Saved #{@source} as #{@destination}"
     end
   end
 
@@ -278,15 +327,19 @@ class Link
   attr_accessor :context, :location, :relation, :source, :original_source
 end
 
-#asset = Asset.new("http://192.168.22.12/", "output")
-#asset = Asset.new("http://74.125.153.132/search?q=cache:KGmiR0Vr5OQJ:mofo.rubyforge.org/+ruby+url+parse&cd=2&hl=en&ct=clnk&client=safari", "output")
-#asset = Asset.new("http://wikipedia.com", "output")
-#asset = Asset.new("http://www.google.com", "output")
-#asset.download
+if $0 == __FILE__
+  #site = Site.new("http://192.168.22.12", "output")
+  #site = Site.new("http://www.google.com", "output")
+  #site = Site.new("http://www.wikipedia.com", "output")
+  
+  #site = Site.new("http://74.125.153.132/search?q=cache:KGmiR0Vr5OQJ:mofo.rubyforge.org/+ruby+url+parse&cd=2&hl=en&ct=clnk&client=safari", "output")
 
-#site = Site.new("http://www.google.com", "output")
-#site = Site.new("http://www.wikipedia.com", "output")
-site = Site.new("http://74.125.153.132/search?q=cache:KGmiR0Vr5OQJ:mofo.rubyforge.org/+ruby+url+parse&cd=2&hl=en&ct=clnk&client=safari", "output")
+  #site = Site.new("http://www.sina.com.cn", "output")
+  #site = Site.new("http://www.sohu.com", "output")
+  site = Site.new("http://zh.wikipedia.org/wiki/奧斯曼帝國", "output")
+
+  puts "open -a safari #{site.home}" if site.home
+end
 
 __END__
 
