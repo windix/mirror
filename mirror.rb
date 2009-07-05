@@ -2,9 +2,8 @@ require 'open-uri'
 require 'uri'
 require 'logger'
 require 'digest/md5'
-require 'cgi'
 require 'thread'
-require 'pp'
+require 'fileutils'
 
 $logger = Logger.new(STDOUT)
 $logger.level = Logger::DEBUG
@@ -22,6 +21,11 @@ class Site
     @assets = {}
     @queue = Queue.new
     
+    unless valid_destination?
+      $logger.error "Invalid destination #{destination}"
+      return
+    end
+
     $logger.info "Mirroring #{source} to #{destination}"
     add_asset source, 1, true, nil
 
@@ -45,6 +49,21 @@ class Site
     else
       $logger.error "Mirroring has failed"
     end
+  rescue
+    $logger.error "Mirroring has failed - #{$!.message}"
+  end
+
+  def valid_destination?
+    if File.directory?(@destination)
+      true
+    else
+      FileUtils.mkdir_p(@destination)
+      $logger.debug "Dir #{@destination} created"
+      true
+    end
+  rescue
+    $logger.error "Failed to create dir #{@destination} - #{$!.message}"
+    false
   end
 
   def add_asset(source, level, retrieve = false, referer = nil)
@@ -69,16 +88,12 @@ class Site
         begin
           $logger.debug "Downloading #{asset.source}"
           asset.download
-          $logger.debug "Downloaded #{asset.source}"
+          $logger.info "Downloaded #{asset.source}"
         rescue
-          $logger.error "Failed to download #{asset.source} - #{$!.message} in #{$!.backtrace}"
+          #$logger.error "Failed to download #{asset.source} - #{$!.message} in #{$!.backtrace}"
+          $logger.error "Failed to download #{asset.source} - #{$!.message}"
           next
         end
-        
-        #if asset.source != asset.original_source
-        #  $logger.debug "Remove original source #{asset.original_source} from assets"
-        #  @assets.delete(asset.original_source)
-        #end
         
         @assets[asset.source] = asset
 
@@ -171,8 +186,6 @@ class Asset
       open(@source, options) do |f|
         @content_type = f.content_type
         @source = escape_url(f.base_uri.to_s)
-        
-        #TODO: if this page has been downloaded already, ignore it
         @data = f.read
       end
       
@@ -308,7 +321,6 @@ class Asset
   end
 
   def save(source)
-    #TODO: exception handling
     if @retrieved
       if (source != @source)
         $logger.debug 'Skipped'
@@ -328,7 +340,7 @@ class Link
 end
 
 if $0 == __FILE__
-  #site = Site.new("http://192.168.22.12", "output")
+  site = Site.new("http://192.168.22.12", "output_a")
   #site = Site.new("http://www.google.com", "output")
   #site = Site.new("http://www.wikipedia.com", "output")
   
@@ -336,7 +348,7 @@ if $0 == __FILE__
 
   #site = Site.new("http://www.sina.com.cn", "output")
   #site = Site.new("http://www.sohu.com", "output")
-  site = Site.new("http://zh.wikipedia.org/wiki/奧斯曼帝國", "output")
+  #site = Site.new("http://zh.wikipedia.org/wiki/奧斯曼帝國", "output")
 
   puts "open -a safari #{site.home}" if site.home
 end
