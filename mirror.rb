@@ -2,15 +2,16 @@ require 'open-uri'
 require 'uri'
 require 'logger'
 require 'digest/md5'
-require 'thread'
+require 'threadpool'
 require 'fileutils'
 
 $logger = Logger.new(STDOUT)
-$logger.level = Logger::DEBUG
+$logger.level = Logger::INFO
 
 class Site
   MAX_LEVELS = 10
   USER_AGENT = "Mozilla/5.0 (compatible; rorrim; +http://github.com/webtreehouse/rorrim/tree/master)"
+  NUMBER_OF_THREADS = 20
 
   attr_accessor :home
 
@@ -19,19 +20,18 @@ class Site
 
     # setup assets hash and queue the initial asset
     @assets = {}
-    @queue = Queue.new
-    
+
     unless valid_destination?
       $logger.error "Invalid destination #{destination}"
       return
     end
 
+    @pool = ThreadPool.new(NUMBER_OF_THREADS)
+
     $logger.info "Mirroring #{source} to #{destination}"
     add_asset source, 1, true, nil
-
-    # start to download
-    worker = process_queue
-    worker.join
+    
+    @pool.shutdown
 
     $logger.debug "Queue is empty"
 
@@ -75,30 +75,25 @@ class Site
       if retrieve
         $logger.debug "Queued #{source}"
         
-        #put into queue
-        @queue.push asset
+        #put into pool
+        @pool.dispatch(asset) do |asset|
+          process_asset(asset)
+        end
       end
     end
   end
 
-  def process_queue
-    Thread.new do
-      while !@queue.empty?
-        asset = @queue.pop
-        begin
-          $logger.debug "Downloading #{asset.source}"
-          asset.download
-          $logger.info "Downloaded #{asset.source}"
-        rescue
-          #$logger.error "Failed to download #{asset.source} - #{$!.message} in #{$!.backtrace}"
-          $logger.error "Failed to download #{asset.source} - #{$!.message}"
-          next
-        end
-        
-        @assets[asset.source] = asset
-
-        process_links asset
-      end
+  def process_asset(asset)
+    begin
+      $logger.debug "Downloading #{asset.source}"
+      asset.download
+      $logger.info "Downloaded #{asset.source}"
+      
+      @assets[asset.source] = asset
+      process_links asset
+    rescue
+      #$logger.error "Failed to download #{asset.source} - #{$!.message} in #{$!.backtrace}"
+      $logger.error "Failed to download #{asset.source} - #{$!.message}"
     end
   end
     
@@ -136,15 +131,16 @@ end
 
 class Asset
   LINK_TYPES = {
-    :image => [/<\s*(img[^\>]*src\s*=\s*["']?([^"'\s>]*))/im, [:location, :url]],
+    #:image => [/<\s*(img[^\>]*src\s*=\s*["']?([^"'\s>]*))/im, [:location, :url]],
     # :anchor => [/<\s*a[^\>]*(href\s*=\s*["']?([^"'\s>]*).*?>)(.*?)<\/a>/im, [:location, :url, :context]],
     :background => [/<\s*([body|table|th|tr|td][^\>]*background\s*=\s*["']?([^"'\s>]*))/im, [:location, :url]],
-    :input => [/<\s*input[^\>]*(src\s*=\s*["']?([^"'\s>]*))/im, [:location, :url]],
+    #:input => [/<\s*input[^\>]*(src\s*=\s*["']?([^"'\s>]*))/im, [:location, :url]],
     :css => [/<\s*link[^\>]*stylesheet[^\>]*[^\>]*(href\s*=\s*["']?([^"'\s>]*))/im, [:location, :url]],
     :cssinvert => [/<\s*link[^\>]*(href\s*=\s*["']?([^"'\s>]*))[^\>]*stylesheet\s*/im, [:location, :url]],
     :cssimport => [/(@\s*import\s*u*r*l*\s*["'\(]*\s?([^"'\s\);]*))/im, [:location, :url]],
     :cssurl => [/(url\(\s*["']?([^"'\s\)]+))/im, [:location, :url]],
-    :javascript => [/<\s*script[^\>]*(src\s*=\s*["']?([^"'\s>]*))/im, [:location, :url]]
+    #:javascript => [/<\s*script[^\>]*(src\s*=\s*["']?([^"'\s>]*))/im, [:location, :url]],
+    :src => [/(src\s*=\s*["']?([^"'\s>]*))/im, [:location, :url]],
   }
 
   MIME_TYPES = {
@@ -342,14 +338,14 @@ end
 if $0 == __FILE__
   site = Site.new("http://192.168.22.12", "output_a")
   #site = Site.new("http://www.google.com", "output")
-  #site = Site.new("http://www.wikipedia.com", "output")
+  #site = Site.new("http://zh.wikipedia.org/wiki/奧斯曼帝國", "output_wiki")
   
   #site = Site.new("http://74.125.153.132/search?q=cache:KGmiR0Vr5OQJ:mofo.rubyforge.org/+ruby+url+parse&cd=2&hl=en&ct=clnk&client=safari", "output")
 
   #site = Site.new("http://www.sina.com.cn", "output")
   #site = Site.new("http://www.sohu.com", "output")
   #site = Site.new("http://zh.wikipedia.org/wiki/奧斯曼帝國", "output")
-
+  
   puts "open -a safari #{site.home}" if site.home
 end
 
