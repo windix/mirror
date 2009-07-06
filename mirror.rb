@@ -1,3 +1,12 @@
+# mirror.rb
+#
+# Author: Windix Feng <windix@gmail.com>
+# License: GPL <http://www.gnu.org/licenses/gpl.html>
+#
+# mirror.rb is a ruby library to make local copy of a web page
+# It's a clone of Chris Hagerman's Rorrim which is written in python
+# http://github.com/webtreehouse/rorrim/tree/master
+
 require 'open-uri'
 require 'uri'
 require 'logger'
