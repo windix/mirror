@@ -5,8 +5,6 @@ require 'digest/md5'
 require 'threadpool'
 require 'fileutils'
 
-$DEBUG = true
-
 $logger = Logger.new(STDOUT)
 $logger.level = $DEBUG ? Logger::DEBUG : Logger::INFO
 
@@ -338,17 +336,13 @@ class Link
 end
 
 if $0 == __FILE__
-  site = Site.new("http://192.168.22.12", "output_a")
-  #site = Site.new("http://www.google.com", "output")
-  #site = Site.new("http://zh.wikipedia.org/wiki/奧斯曼帝國", "output_wiki")
-  
-  #site = Site.new("http://74.125.153.132/search?q=cache:KGmiR0Vr5OQJ:mofo.rubyforge.org/+ruby+url+parse&cd=2&hl=en&ct=clnk&client=safari", "output")
-
-  #site = Site.new("http://www.sina.com.cn", "output")
-  #site = Site.new("http://www.sohu.com", "output")
-  #site = Site.new("http://zh.wikipedia.org/wiki/奧斯曼帝國", "output")
-  
-  puts "open -a safari #{site.home}" if site.home
+  if ARGV.size == 2
+    url, output = *ARGV
+    site = Site.new(url, output)
+    puts "URL #{url} has been mirrored to #{site.home}" if site.home
+  else
+    puts "Usage: mirror.rb [URL] [directory]"
+  end
 end
 
 __END__
