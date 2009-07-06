@@ -5,12 +5,14 @@ require 'digest/md5'
 require 'threadpool'
 require 'fileutils'
 
+$DEBUG = true
+
 $logger = Logger.new(STDOUT)
-$logger.level = Logger::INFO
+$logger.level = $DEBUG ? Logger::DEBUG : Logger::INFO
 
 class Site
   MAX_LEVELS = 10
-  USER_AGENT = "Mozilla/5.0 (compatible; rorrim; +http://github.com/webtreehouse/rorrim/tree/master)"
+  USER_AGENT = "Mozilla/5.0 (compatible; mirror; ruby/#{RUBY_VERSION}/#{RUBY_PLATFORM})"
   NUMBER_OF_THREADS = 20
 
   attr_accessor :home
