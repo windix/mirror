@@ -22,7 +22,7 @@ class Site
   USER_AGENT = "Mozilla/5.0 (compatible; mirror; ruby/#{RUBY_VERSION}/#{RUBY_PLATFORM})"
   NUMBER_OF_THREADS = 20
 
-  attr_accessor :home
+  attr_accessor :home_asset, :assets
 
   def initialize(source, destination)
     @destination = destination
@@ -54,7 +54,7 @@ class Site
 
     if @assets.has_key?(source) && @assets[source].retrieved
       $logger.info "Mirroring is complete"
-      @home = @assets[source].destination
+      @home_asset = @assets[source]
     else
       $logger.error "Mirroring has failed"
     end
@@ -168,7 +168,7 @@ class Asset
     "text/plain" => ".txt",
   }
 
-  attr_accessor :source, :destination, :level, :retrieved, :filename
+  attr_accessor :source, :destination, :level, :retrieved, :filename, :hash, :extname, :page_title
 
   def initialize(source, destination, level, user_agent, referer)
     @source = escape_url(source)
@@ -197,7 +197,7 @@ class Asset
       @base = get_base
 
       @filename = get_filename
-      
+
       @page_title = get_page_title
       
       if @filename
@@ -262,17 +262,22 @@ class Asset
   end
 
   def get_filename
-    Digest::MD5.hexdigest(@source) + MIME_TYPES[@content_type] if MIME_TYPES.has_key?(@content_type)
+    if MIME_TYPES.has_key?(@content_type)
+      @hash = Digest::MD5.hexdigest(@source)
+      @extname = MIME_TYPES[@content_type]
+      
+      @hash + @extname
+    end
   end
   
   def get_page_title
-    $1 if MIME_TYPES[@content_type] == ".html" && @data =~ /<\s*title[^>]*>(.*?)<\/title>/im
+    $1 if @extname == ".html" && @data =~ /<\s*title[^>]*>(.*?)<\/title>/im
   end
 
   def get_links
     @links = {}
     
-    if [".html", ".css"].include?(MIME_TYPES[@content_type])
+    if [".html", ".css"].include?(@extname)
       $logger.debug "Getting linked assets in #{@source}"
       
       LINK_TYPES.each do |relation, details|
@@ -309,7 +314,7 @@ class Asset
   end
 
   def update_links(assets)
-    if @retrieved && [".html", ".css"].include?(MIME_TYPES[@content_type])
+    if @retrieved && [".html", ".css"].include?(@extname)
       $logger.debug "Updating links in #{@source}"
 
       @links.each do |source, link|
@@ -348,7 +353,7 @@ if $0 == __FILE__
   if ARGV.size == 2
     url, output = *ARGV
     site = Site.new(url, output)
-    puts "URL #{url} has been mirrored to #{site.home}" if site.home
+    puts "URL #{url} has been mirrored to #{site.home_asset.destination}" if site.home_asset
   else
     puts "Usage: mirror.rb [URL] [directory]"
   end
